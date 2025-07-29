@@ -11,6 +11,7 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
+import os
 
 class AirQualityClassifier:
     def __init__(self):
@@ -120,6 +121,8 @@ class AirQualityClassifier:
         return model
     
     def train(self, data_file, test_size=0.2, validation_size=0.1, epochs=100):
+        # Store training data for TensorFlow Lite conversion
+        self.X_train_scaled = None
         """
         Train the air quality classification model on your dataset
         """
@@ -182,6 +185,9 @@ class AirQualityClassifier:
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_val_scaled = self.scaler.transform(X_val)
         X_test_scaled = self.scaler.transform(X_test)
+        
+        # Store for TensorFlow Lite conversion
+        self.X_train_scaled = X_train_scaled
         
         # Build model
         num_classes = len(self.label_encoder.classes_)
@@ -258,9 +264,6 @@ class AirQualityClassifier:
         
         # Save model components
         self.save_model_components()
-        
-        # Convert to TinyML format
-        self.convert_to_tinyml()
         
         return history
     
@@ -354,16 +357,108 @@ class AirQualityClassifier:
         print("- scaler.pkl")
         print("- label_encoder.pkl")
         print("- feature_columns.pkl")
+    
+        # Convert model to TensorFlow Lite
+        converter = tf.lite.TFLiteConverter.from_keras_model(self.model)
+        tflite_model = converter.convert()
 
-    def convert_to_tinyml(self):
-        """Convert model to TensorFlow Lite for ESP32-S3 deployment"""
-        print("\nConverting to TensorFlow Lite...")
-        # TODO - Model quantization 
+        # Save the model
+        with open('air_quality_model.tflite', 'wb') as f:
+            f.write(tflite_model)
+        
+        # Create C array header file for ESP32
+        self.create_c_header(tflite_model)
+        
+        print(f"TinyML model saved:")
+        print(f"- air_quality_model.tflite ({len(tflite_model)} bytes)")
+        print("- air_quality_model.h (C header file)")
+        
+        # Model size analysis
+        try:
+            original_size = os.path.getsize('air_quality_model.h5')
+            tflite_size = len(tflite_model)
+            compression_ratio = original_size / tflite_size
+            
+            print(f"\nModel Analysis:")
+            print(f"- Quantization Type: {quantization_type}")
+            print(f"- Original Keras model: {original_size/1024:.1f} KB")
+            print(f"- TensorFlow Lite model: {tflite_size/1024:.1f} KB")
+            print(f"- Compression ratio: {compression_ratio:.1f}x")
+            print(f"- ESP32-S3 Compatible: {'✅ Yes' if tflite_size < 1000000 else '⚠️  Large but possible'}")
+            
+        except Exception as e:
+            print(f"Could not analyze model size: {e}")
+            print(f"TensorFlow Lite model size: {len(tflite_model)} bytes")
+    
+    def create_c_header(self, tflite_model):
+        """Create C header file for ESP32 integration"""
+        model_size = len(tflite_model)
+        
+        header_content = f"""#ifndef AIR_QUALITY_MODEL_H
+#define AIR_QUALITY_MODEL_H
 
+#include <stdint.h>
+
+// Model generated for ESP32-S3 TinyML deployment
+// Dataset: Air Quality with NO2, O3, PM2.5 measurements
+// Model size: {model_size} bytes
+
+const unsigned int air_quality_model_len = {model_size};
+
+// Air quality class labels
+const char* air_quality_labels[] = {{
+"""
+        
+        # Add class labels
+        for i, label in enumerate(self.label_encoder.classes_):
+            header_content += f'    "{label}"'
+            if i < len(self.label_encoder.classes_) - 1:
+                header_content += ","
+            header_content += "\n"
+        
+        header_content += "};\n\n"
+        
+        # Add feature information
+        header_content += f"// Number of input features: {len(self.feature_columns)}\n"
+        header_content += f"const unsigned int num_features = {len(self.feature_columns)};\n"
+        header_content += f"const unsigned int num_classes = {len(self.label_encoder.classes_)};\n\n"
+        
+        header_content += "// Feature names for reference\n"
+        header_content += "const char* feature_names[] = {\n"
+        for i, feature in enumerate(self.feature_columns):
+            header_content += f'    "{feature}"'
+            if i < len(self.feature_columns) - 1:
+                header_content += ","
+            header_content += "\n"
+        header_content += "};\n\n"
+        
+        # Add preprocessing information
+        header_content += "// Preprocessing notes:\n"
+        header_content += "// 1. Your dataset appears to be pre-normalized\n"
+        header_content += "// 2. Apply the saved scaler.pkl for consistency\n"
+        header_content += "// 3. Handle derived features as per training pipeline\n\n"
+        
+        # Add model data
+        header_content += "// TensorFlow Lite model data\n"
+        header_content += "const unsigned char air_quality_model[] = {\n"
+        
+        # Convert bytes to hex array
+        for i in range(0, len(tflite_model), 16):
+            header_content += "    "
+            for j in range(16):
+                if i + j < len(tflite_model):
+                    header_content += f"0x{tflite_model[i + j]:02x}"
+                    if i + j < len(tflite_model) - 1:
+                        header_content += ", "
+            header_content += "\n"
+        
+        header_content += "};\n\n#endif // AIR_QUALITY_MODEL_H\n"
+        
+        # Save header file
+        with open('air_quality_model.h', 'w') as f:
+            f.write(header_content)
 
 if __name__ == "__main__":
-    import os
-    
     # Initialize classifier
     classifier = AirQualityClassifier()
     
@@ -380,10 +475,12 @@ if __name__ == "__main__":
             print("\nTraining completed successfully!")
             print("\nGenerated files:")
             print("1. air_quality_model.h5 - Keras model")
-            print("2. scaler.pkl - Feature scaler")
-            print("3. label_encoder.pkl - Label encoder")
-            print("4. feature_columns.pkl - Feature list")
-            print("5. Visualization plots (PNG files)")
+            print("2. air_quality_model.tflite - TensorFlow Lite model")
+            print("3. air_quality_model.h - C header for ESP32")
+            print("4. scaler.pkl - Feature scaler")
+            print("5. label_encoder.pkl - Label encoder")
+            print("6. feature_columns.pkl - Feature list")
+            print("7. Visualization plots (PNG files)")
         
     except Exception as e:
         print(f"Error during training: {e}")
