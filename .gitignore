@@ -1,3 +1,6 @@
+esp32-firmware/esp32-tflm-test/build
+esp32-firmware/tflite-micro
+
 tensorflow/
 venv/
 misc/

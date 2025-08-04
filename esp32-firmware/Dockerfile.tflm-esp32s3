@@ -1,0 +1,17 @@
+# Official ESP-IDF Docker image
+FROM espressif/idf:release-v5.1
+
+RUN apt-get update && apt-get install -y \
+    git wget curl unzip ninja-build cmake python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set environment variables for ESP-IDF
+ENV IDF_PATH=/opt/esp/idf
+
+# Install ESP-IDF tools
+RUN . $IDF_PATH/export.sh && \
+    idf_tools.py install && \
+    $IDF_PATH/install.sh
+
+WORKDIR /workspace
+ENTRYPOINT ["/bin/bash", "-c", "source /opt/esp/idf/export.sh && exec bash"]

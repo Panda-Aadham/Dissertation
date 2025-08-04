@@ -1,0 +1,59 @@
+# set(TFLM_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../tflite-micro)
+set(TFLM_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../tflite-micro)
+message(STATUS "CMAKE_CURRENT_SOURCE_DIR = ${CMAKE_CURRENT_SOURCE_DIR}")
+message(STATUS "CMAKE_CURRENT_LIST_DIR = ${CMAKE_CURRENT_LIST_DIR}")
+message(STATUS "TFLM_ROOT = ${TFLM_ROOT}")
+
+# Collect TFLM source files
+file(GLOB_RECURSE TFLM_SOURCES
+    "${TFLM_ROOT}/tensorflow/lite/micro/*.cc"
+    "${TFLM_ROOT}/tensorflow/lite/micro/kernels/*.cc"
+    "${TFLM_ROOT}/tensorflow/lite/core/api/*.cc"
+    "${TFLM_ROOT}/tensorflow/lite/kernels/internal/*.cc"
+    "${TFLM_ROOT}/tensorflow/lite/kernels/kernel_util.cc"
+    "${TFLM_ROOT}/tensorflow/lite/schema/schema_utils.cc"
+)
+
+# Exclude _test.cc and test directory specifically
+list(FILTER TFLM_SOURCES EXCLUDE REGEX ".*/test/.*")
+list(FILTER TFLM_SOURCES EXCLUDE REGEX ".*_test\\.cc$")
+list(FILTER TFLM_SOURCES EXCLUDE REGEX ".*/benchmark/.*")
+
+# Debug: print number of source files found
+list(LENGTH TFLM_SOURCES TFLM_SOURCES_COUNT)
+message(STATUS "Found ${TFLM_SOURCES_COUNT} TFLM source files")
+
+idf_component_register(
+    SRCS ${TFLM_SOURCES}
+    INCLUDE_DIRS 
+        "${TFLM_ROOT}"
+        "${TFLM_ROOT}/third_party/flatbuffers/include"
+        "${TFLM_ROOT}/third_party/eyalroz_printf/src"
+        "${TFLM_ROOT}/third_party/gemmlowp"
+        "${TFLM_ROOT}/third_party/ruy"
+        "${TFLM_ROOT}/third_party"
+    REQUIRES 
+        esp_timer
+        esp_common
+        newlib
+    PRIV_REQUIRES
+        heap
+)
+
+# Add compile definitions
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    TF_LITE_DISABLE_X86_NEON
+    TF_LITE_STATIC_MEMORY
+    TF_LITE_MCU_DEBUG_LOG
+)
+
+# Compiler flags for ESP32
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -fno-rtti
+    -fno-exceptions
+    -fno-threadsafe-statics
+    -fmessage-length=0
+    -DTF_LITE_STATIC_MEMORY
+    -DTF_LITE_DISABLE_X86_NEON
+    -O2
+)
