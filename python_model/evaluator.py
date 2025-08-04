@@ -32,25 +32,25 @@ class AirQualityModelEvaluator:
         try:
             # Load Keras model
             self.model = load_model(self.model_path)
-            print(f"✅ Loaded Keras model from {self.model_path}")
+            print(f"Loaded Keras model from {self.model_path}")
             
             # Load preprocessing components
             self.scaler = joblib.load('scaler.pkl')
             self.label_encoder = joblib.load('label_encoder.pkl')
             self.feature_columns = joblib.load('feature_columns.pkl')
             
-            print("✅ Loaded preprocessing components:")
-            print(f"   - Feature columns: {len(self.feature_columns)}")
-            print(f"   - Classes: {list(self.label_encoder.classes_)}")
+            print("Loaded preprocessing components:")
+            print(f" - Feature columns: {len(self.feature_columns)}")
+            print(f" - Classes: {list(self.label_encoder.classes_)}")
             
             # Load TensorFlow Lite model if available
             if os.path.exists('air_quality_model.tflite'):
                 self.tflite_interpreter = tf.lite.Interpreter(model_path='air_quality_model.tflite')
                 self.tflite_interpreter.allocate_tensors()
-                print("✅ Loaded TensorFlow Lite model for ESP32-S3")
+                print("Loaded TensorFlow Lite model for ESP32-S3")
             
         except Exception as e:
-            print(f"❌ Error loading model components: {e}")
+            print(f"Error loading model components: {e}")
             raise
     
     def prepare_features(self, df):
@@ -98,7 +98,7 @@ class AirQualityModelEvaluator:
     
     def evaluate_on_test_data(self, test_data_file):
         """Comprehensive evaluation on test dataset"""
-        print(f"\n🔬 EVALUATING MODEL ON: {test_data_file}")
+        print(f"\nEVALUATING MODEL ON: {test_data_file}")
         print("=" * 60)
         
         # Load and prepare test data
@@ -107,7 +107,7 @@ class AirQualityModelEvaluator:
         
         # Check if target column exists
         if self.target_column not in df_test.columns:
-            print(f"❌ Target column '{self.target_column}' not found!")
+            print(f"Target column '{self.target_column}' not found!")
             return None
         
         # Prepare features
@@ -129,7 +129,7 @@ class AirQualityModelEvaluator:
         y_test_encoded = self.label_encoder.transform(y_test)
         
         # Make predictions with Keras model
-        print("\n🧠 Making predictions...")
+        print("\n Making predictions...")
         y_pred_proba = self.model.predict(X_test_scaled, verbose=0)
         y_pred = np.argmax(y_pred_proba, axis=1)
         
@@ -139,14 +139,14 @@ class AirQualityModelEvaluator:
             y_test_encoded, y_pred, average='weighted'
         )
         
-        print(f"\n📊 OVERALL PERFORMANCE:")
+        print(f"\n OVERALL PERFORMANCE:")
         print(f"   Accuracy:  {accuracy:.4f}")
         print(f"   Precision: {precision:.4f}")
         print(f"   Recall:    {recall:.4f}")
         print(f"   F1-Score:  {fscore:.4f}")
         
         # Detailed classification report
-        print(f"\n📋 DETAILED CLASSIFICATION REPORT:")
+        print(f"\n DETAILED CLASSIFICATION REPORT:")
         target_names = self.label_encoder.classes_
         print(classification_report(y_test_encoded, y_pred, target_names=target_names))
         
@@ -185,7 +185,7 @@ class AirQualityModelEvaluator:
     
     def analyze_class_distribution(self, y_true, y_pred, target_names):
         """Analyze class distribution in predictions vs ground truth"""
-        print(f"\n📈 CLASS DISTRIBUTION ANALYSIS:")
+        print(f"\n CLASS DISTRIBUTION ANALYSIS:")
         print("-" * 50)
         
         # Convert predictions back to class names
@@ -231,7 +231,7 @@ class AirQualityModelEvaluator:
     
     def analyze_class_performance(self, y_true, y_pred, y_pred_proba, target_names):
         """Analyze performance for each air quality class"""
-        print(f"\n🎯 CLASS-WISE PERFORMANCE ANALYSIS:")
+        print(f"\n CLASS-WISE PERFORMANCE ANALYSIS:")
         print("-" * 60)
         
         for i, class_name in enumerate(target_names):
@@ -271,7 +271,7 @@ class AirQualityModelEvaluator:
         predictions = np.argmax(y_pred_proba, axis=1)
         correct_predictions = (predictions == y_true)
         
-        print(f"\n🎯 PREDICTION CONFIDENCE ANALYSIS:")
+        print(f"\n PREDICTION CONFIDENCE ANALYSIS:")
         print("-" * 50)
         print(f"Average confidence (all):        {np.mean(max_proba):.4f}")
         print(f"Average confidence (correct):    {np.mean(max_proba[correct_predictions]):.4f}")
@@ -356,7 +356,7 @@ class AirQualityModelEvaluator:
     
     def analyze_feature_correlations(self, X_features, y_true):
         """Analyze feature correlations with target variable"""
-        print(f"\n🔍 FEATURE CORRELATION ANALYSIS:")
+        print(f"\n FEATURE CORRELATION ANALYSIS:")
         print("-" * 50)
         
         # Create correlation matrix
@@ -433,7 +433,7 @@ class AirQualityModelEvaluator:
         print(f"Max prob difference:     {np.max(max_prob_diff):.6f}")
         
         # ESP32-S3 deployment assessment
-        print(f"\n🚁 ESP32-S3 DEPLOYMENT ASSESSMENT:")
+        print(f"\n ESP32-S3 DEPLOYMENT ASSESSMENT:")
         print(f"   Model size:          {os.path.getsize('air_quality_model.tflite')/1024:.1f} KB")
         print(f"   Accuracy retention:  {tflite_accuracy/keras_accuracy:.4f}")
         print(f"   Suitable for drone:  {'✅ Yes' if agreement > 0.95 else '⚠️  Check'}")
@@ -523,15 +523,15 @@ class AirQualityModelEvaluator:
             print(f"  Speedup vs Keras:       {keras_time/tflite_time:.1f}x")
             
             # ESP32-S3 deployment recommendations
-            print(f"\n🚁 DRONE DEPLOYMENT RECOMMENDATIONS:")
+            print(f"\n DRONE DEPLOYMENT RECOMMENDATIONS:")
             if tflite_time < 0.1:  # 100ms
-                print("  ✅ Suitable for real-time monitoring (>10 Hz)")
+                print("   Suitable for real-time monitoring (>10 Hz)")
             elif tflite_time < 0.5:  # 500ms
-                print("  ✅ Suitable for frequent monitoring (>2 Hz)")
+                print("   Suitable for frequent monitoring (>2 Hz)")
             elif tflite_time < 1.0:  # 1 second
-                print("  ⚠️  Suitable for periodic monitoring (~1 Hz)")
+                print("   Suitable for periodic monitoring (~1 Hz)")
             else:
-                print("  ❌ Too slow for real-time drone applications")
+                print("   Too slow for real-time drone applications")
         
         return keras_time, tflite_time if self.tflite_interpreter else None
 
