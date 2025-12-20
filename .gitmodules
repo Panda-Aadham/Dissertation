@@ -1,0 +1,3 @@
+[submodule "ros2_ws/src/third_party/gaden"]
+	path = ros2_ws/src/third_party/gaden
+	url = git@github.com:MAPIRlab/gaden.git
