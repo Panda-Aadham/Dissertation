@@ -7,3 +7,6 @@
 [submodule "ros2_ws/src/third_party/GSL"]
 	path = ros2_ws/src/third_party/GSL
 	url = https://github.com/MAPIRlab/GasSourceLocalization.git
+[submodule "ros2_ws/src/third_party/GMRF-wind"]
+	path = ros2_ws/src/third_party/GMRF-wind
+	url = https://github.com/MAPIRlab/GMRF-wind.git
