@@ -16,3 +16,6 @@
 [submodule "ros2_ws/src/third_party/instance_segmentation"]
 	path = ros2_ws/src/third_party/instance_segmentation
 	url = https://github.com/MAPIRlab/instance_segmentation.git
+[submodule "ros2_ws/src/third_party/vision_msgs"]
+	path = ros2_ws/src/third_party/vision_msgs
+	url = https://github.com/ros-perception/vision_msgs.git
