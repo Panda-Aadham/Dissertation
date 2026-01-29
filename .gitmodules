@@ -13,3 +13,6 @@
 [submodule "ros2_ws/src/third_party/voxeland"]
 	path = ros2_ws/src/third_party/voxeland
 	url = git@github.com:MAPIRlab/Voxeland.git
+[submodule "ros2_ws/src/third_party/instance_segmentation"]
+	path = ros2_ws/src/third_party/instance_segmentation
+	url = https://github.com/MAPIRlab/instance_segmentation.git
