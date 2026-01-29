@@ -10,3 +10,6 @@
 [submodule "ros2_ws/src/third_party/GMRF-wind"]
 	path = ros2_ws/src/third_party/GMRF-wind
 	url = https://github.com/MAPIRlab/GMRF-wind.git
+[submodule "ros2_ws/src/third_party/voxeland"]
+	path = ros2_ws/src/third_party/voxeland
+	url = git@github.com:MAPIRlab/Voxeland.git
