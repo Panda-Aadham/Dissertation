@@ -22,3 +22,6 @@
 [submodule "ros2_ws/src/third_party/magic_enum"]
 	path = ros2_ws/src/third_party/magic_enum
 	url = https://github.com/Neargye/magic_enum.git
+[submodule "ros2_ws/src/third_party/BasicSim"]
+	path = ros2_ws/src/third_party/BasicSim
+	url = https://github.com/PepeOjeda/BasicSim.git
