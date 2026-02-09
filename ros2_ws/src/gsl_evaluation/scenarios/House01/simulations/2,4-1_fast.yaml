@@ -1,0 +1,11 @@
+source_x: "-0.40"
+source_y: "-2.90"
+source_z: "-0.30"
+gas_type: 10
+initial_iteration: 280
+allow_looping: false
+loop_from_iteration: 280
+loop_to_iteration: 288
+start_pos_x: "-6.0"
+start_pos_y: "2.0"
+start_pos_z: "0.0"

@@ -1,0 +1,6 @@
+image: ../../../../vgr_dataset/share/vgr_dataset/scenarios/House01/occupancy.pgm
+resolution: 0.01
+origin: [-7.55, -7.88, 0.0]
+occupied_thresh: 0.9
+free_thresh: 0.1
+negate: 0

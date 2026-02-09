@@ -1,0 +1,27 @@
+gaden_environment:
+  ros__parameters:
+    verbose: false
+    wait_preprocessing: false
+    fixed_frame: "map"
+    CAD_models:
+      - "!color [0.52, 0.52, 0.52]"
+      - "$(find-pkg-share vgr_dataset)/scenarios/House01/cad_models/House01.dae"
+    occupancy3D_data: "$(find-pkg-share vgr_dataset)/scenarios/House01/OccupancyGrid3D.csv"
+    number_of_sources: 1
+    source_0_position_x: $(var source_x)
+    source_0_position_y: $(var source_y)
+    source_0_position_z: $(var source_z)
+    source_0_scale: 0.2
+    source_0_color: [0.0, 1.0, 0.0]
+
+gaden_player:
+  ros__parameters:
+    verbose: false
+    player_freq: $(var player_freq)
+    initial_iteration: $(var initial_iteration)
+    num_simulators: 1
+    simulation_data_0: "$(var runtime_dir)/gas_simulations/$(var simulation)/FilamentSimulation_gasType_$(var gas_type)_sourcePosition_$(var source_x)_$(var source_y)_$(var source_z)"
+    occupancyFile: "$(find-pkg-share vgr_dataset)/scenarios/House01/OccupancyGrid3D.csv"
+    allow_looping: $(var allow_looping)
+    loop_from_iteration: $(var loop_from_iteration)
+    loop_to_iteration: $(var loop_to_iteration)
