@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import struct
 import tempfile
@@ -15,11 +16,6 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterFile
 from ament_index_python.packages import get_package_share_directory
 
-import sys
-sys.path.append(get_package_share_directory("gaden_common"))
-from gaden_internal_py.utils import read_sim_yaml  # NOQA # type: ignore
-
-
 GADEN_VERSION_MAJOR = 3
 GADEN_VERSION_MINOR = 0
 GADEN_RESULT_IDENTIFIER = b"GADEN_RESULT\x00"
@@ -32,6 +28,129 @@ def launch_arguments():
         DeclareLaunchArgument("simulation", default_value="1,3-2,4_fast"),
         DeclareLaunchArgument("use_rviz", default_value="False"),
     ]
+
+
+def _clean_scalar(value):
+    value = str(value).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
+def _read_simple_yaml(yaml_file: Path):
+    values = {}
+    for raw_line in yaml_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = _clean_scalar(value)
+    return values
+
+
+def _parse_vgr_simulation_launch(launch_file: Path):
+    text = launch_file.read_text(encoding="utf-8", errors="ignore")
+    args = dict(re.findall(r'<arg\s+name="([^"]+)"\s+default="([^"]*)"', text))
+
+    required = ("source_location_x", "source_location_y", "source_location_z", "gas_type")
+    missing = [name for name in required if name not in args]
+    if missing:
+        raise RuntimeError(f"Could not parse {', '.join(missing)} from '{launch_file}'.")
+
+    return {
+        "source_x": args["source_location_x"],
+        "source_y": args["source_location_y"],
+        "source_z": args["source_location_z"],
+        "gas_type": args["gas_type"],
+        "initial_iteration": 280,
+        "allow_looping": "true",
+        "loop_from_iteration": 280,
+        "loop_to_iteration": 288,
+    }
+
+
+def _set_launch_configs(context, values):
+    for key, value in values.items():
+        SetLaunchConfiguration(name=key, value=str(value)).execute(context)
+
+
+def _load_simulation_settings(context, pkg_dir, vgr_dir, scenario, simulation):
+    local_sim_yaml = Path(pkg_dir) / "scenarios" / scenario / "simulations" / f"{simulation}.yaml"
+    if local_sim_yaml.is_file():
+        settings = _read_simple_yaml(local_sim_yaml)
+    else:
+        vgr_launch = Path(vgr_dir) / "scenarios" / scenario / "launch" / simulation / "GADEN_ros2.launch"
+        if not vgr_launch.is_file():
+            available = sorted(path.name for path in (Path(vgr_dir) / "scenarios" / scenario / "gas_simulations").glob("*") if path.is_dir())
+            raise RuntimeError(
+                f"Simulation '{simulation}' was not found for {scenario}. "
+                f"Available simulations: {', '.join(available)}"
+            )
+        settings = _parse_vgr_simulation_launch(vgr_launch)
+
+    defaults = {
+        "initial_iteration": 280,
+        "allow_looping": "true",
+        "loop_from_iteration": 280,
+        "loop_to_iteration": 288,
+    }
+    defaults.update(settings)
+    settings = defaults
+    _set_launch_configs(context, settings)
+    return settings
+
+
+def _resolve_gas_source(gas_simulation_dir: Path, gas_type: str, source_x: str, source_y: str, source_z: str):
+    gas_folder_name = f"FilamentSimulation_gasType_{gas_type}_sourcePosition_{source_x}_{source_y}_{source_z}"
+    gas_source = gas_simulation_dir / gas_folder_name
+    if gas_source.is_dir():
+        return gas_source
+
+    candidates = sorted(gas_simulation_dir.glob(f"FilamentSimulation_gasType_{gas_type}_sourcePosition_*"))
+    if len(candidates) == 1 and candidates[0].is_dir():
+        return candidates[0]
+
+    available = ", ".join(path.name for path in candidates if path.is_dir())
+    raise RuntimeError(
+        f"Could not find gas simulation folder '{gas_folder_name}' in '{gas_simulation_dir}'. "
+        f"Available matching folders: {available or 'none'}"
+    )
+
+
+def _write_gaden_params(params_yaml_file: Path, scenario: str, gas_target: Path):
+    params_yaml_file.write_text(
+        "\n".join([
+            "gaden_environment:",
+            "  ros__parameters:",
+            "    verbose: false",
+            "    wait_preprocessing: false",
+            '    fixed_frame: "map"',
+            "    CAD_models:",
+            "      - \"!color [0.52, 0.52, 0.52]\"",
+            f"      - \"$(find-pkg-share vgr_dataset)/scenarios/{scenario}/cad_models/{scenario}.dae\"",
+            f"    occupancy3D_data: \"$(find-pkg-share vgr_dataset)/scenarios/{scenario}/OccupancyGrid3D.csv\"",
+            "    number_of_sources: 1",
+            "    source_0_position_x: $(var source_x)",
+            "    source_0_position_y: $(var source_y)",
+            "    source_0_position_z: $(var source_z)",
+            "    source_0_scale: 0.2",
+            "    source_0_color: [0.0, 1.0, 0.0]",
+            "",
+            "gaden_player:",
+            "  ros__parameters:",
+            "    verbose: false",
+            "    player_freq: $(var player_freq)",
+            "    initial_iteration: $(var initial_iteration)",
+            "    num_simulators: 1",
+            f"    simulation_data_0: \"{gas_target}\"",
+            f"    occupancyFile: \"$(find-pkg-share vgr_dataset)/scenarios/{scenario}/OccupancyGrid3D.csv\"",
+            "    allow_looping: $(var allow_looping)",
+            "    loop_from_iteration: $(var loop_from_iteration)",
+            "    loop_to_iteration: $(var loop_to_iteration)",
+            "",
+        ]),
+        encoding="utf-8",
+    )
 
 
 def _read_occupancy_metadata(occupancy_file: Path):
@@ -194,7 +313,7 @@ def _convert_legacy_gas_logs(gas_source: Path, gas_target: Path, occupancy_file:
             target_file.write_bytes(original_data)
             continue
 
-        # VGR House01 logs can use a legacy header layout that current GADEN misparses.
+        # Older VGR logs can use a legacy header layout that current GADEN misparses.
         # Rewrite the environment section in the exact format expected by the v1 loader.
         struct.pack_into("<3d", raw, 4, *min_coord)
         struct.pack_into("<3d", raw, 28, *max_coord)
@@ -268,9 +387,7 @@ def launch_setup(context, *args, **kwargs):
     pkg_dir = LaunchConfiguration("pkg_dir").perform(context)
     vgr_dir = get_package_share_directory("vgr_dataset")
 
-    params_yaml_file = os.path.join(pkg_dir, "scenarios", scenario, "params", "gaden_params.yaml")
-
-    read_sim_yaml(context)
+    _load_simulation_settings(context, pkg_dir, vgr_dir, scenario, simulation)
 
     source_x = LaunchConfiguration("source_x").perform(context)
     source_y = LaunchConfiguration("source_y").perform(context)
@@ -278,14 +395,17 @@ def launch_setup(context, *args, **kwargs):
     gas_type = LaunchConfiguration("gas_type").perform(context)
 
     runtime_dir = Path(tempfile.gettempdir()) / "vgr_pmfs_house01_env" / scenario / simulation
-    gas_target = runtime_dir / "gas_simulations" / simulation / f"FilamentSimulation_gasType_{gas_type}_sourcePosition_{source_x}_{source_y}_{source_z}"
-    gas_source = Path(vgr_dir) / "scenarios" / scenario / "gas_simulations" / simulation / gas_target.name
+    gas_simulation_dir = Path(vgr_dir) / "scenarios" / scenario / "gas_simulations" / simulation
+    gas_source = _resolve_gas_source(gas_simulation_dir, gas_type, source_x, source_y, source_z)
+    gas_target = runtime_dir / "gas_simulations" / simulation / gas_source.name
     wind_target = runtime_dir / "wind"
     wind_source = Path(vgr_dir) / "scenarios" / scenario / "wind_simulations" / simulation
     occupancy_file = Path(vgr_dir) / "scenarios" / scenario / "OccupancyGrid3D.csv"
 
     runtime_dir.mkdir(parents=True, exist_ok=True)
     gas_target.parent.mkdir(parents=True, exist_ok=True)
+    params_yaml_file = runtime_dir / "gaden_params.yaml"
+    _write_gaden_params(params_yaml_file, scenario, gas_target)
 
     _convert_legacy_gas_logs(gas_source, gas_target, occupancy_file)
     _convert_wind_files(wind_source, wind_target, occupancy_file, simulation)
@@ -315,14 +435,14 @@ def launch_setup(context, *args, **kwargs):
             executable="environment",
             name="gaden_environment",
             output="screen",
-            parameters=[ParameterFile(params_yaml_file, allow_substs=True)],
+            parameters=[ParameterFile(str(params_yaml_file), allow_substs=True)],
         ),
         Node(
             package="gaden_player",
             executable="player",
             name="gaden_player",
             output="screen",
-            parameters=[ParameterFile(params_yaml_file, allow_substs=True)],
+            parameters=[ParameterFile(str(params_yaml_file), allow_substs=True)],
         ),
     ]
 

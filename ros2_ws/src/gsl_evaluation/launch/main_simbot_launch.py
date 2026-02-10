@@ -1,6 +1,8 @@
 import os
 import math
+import re
 import tempfile
+from collections import deque
 from pathlib import Path
 
 from launch import LaunchDescription
@@ -11,11 +13,6 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node, PushRosNamespace
 from ament_index_python.packages import get_package_share_directory
 from launch.frontend.parse_substitution import parse_substitution
-
-import sys
-sys.path.append(get_package_share_directory("gaden_common"))
-from gaden_internal_py.utils import read_sim_yaml  # NOQA # type: ignore
-
 
 NON_SEMANTIC_METHODS = {
     "PMFS",
@@ -40,11 +37,23 @@ def _truthy(value):
     return str(value).lower() in ("true", "1", "yes", "on")
 
 
+def _clean_scalar(value):
+    value = str(value).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
+def _set_launch_configs(context, values):
+    for key, value in values.items():
+        SetLaunchConfiguration(name=key, value=str(value)).execute(context)
+
+
 def loud_logs(title, details=None, condition=None):
     actions = [
         LogInfo(condition=condition, msg=""),
         LogInfo(condition=condition, msg="================================================================"),
-        LogInfo(condition=condition, msg=["[VGR GSL HOUSE01] ", title]),
+        LogInfo(condition=condition, msg=["[VGR GSL] ", title]),
     ]
     if details:
         for detail in details:
@@ -60,8 +69,148 @@ def _read_simple_yaml(yaml_file):
         if not line or ":" not in line:
             continue
         key, value = line.split(":", 1)
-        values[key.strip()] = value.strip()
+        values[key.strip()] = _clean_scalar(value)
     return values
+
+
+def _parse_origin(origin_value):
+    return [float(value) for value in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", origin_value)]
+
+
+def _parse_vgr_simulation_launch(launch_file):
+    text = launch_file.read_text(encoding="utf-8", errors="ignore")
+    args = dict(re.findall(r'<arg\s+name="([^"]+)"\s+default="([^"]*)"', text))
+
+    required = ("source_location_x", "source_location_y", "source_location_z", "gas_type")
+    missing = [name for name in required if name not in args]
+    if missing:
+        raise RuntimeError(f"Could not parse {', '.join(missing)} from '{launch_file}'.")
+
+    return {
+        "source_x": args["source_location_x"],
+        "source_y": args["source_location_y"],
+        "source_z": args["source_location_z"],
+        "gas_type": args["gas_type"],
+        "initial_iteration": 280,
+        "allow_looping": "true",
+        "loop_from_iteration": 280,
+        "loop_to_iteration": 288,
+    }
+
+
+def _auto_start_position(map_yaml, source_x, source_y, min_clearance=0.0):
+    metadata = _read_simple_yaml(map_yaml)
+    image = Path(metadata["image"])
+    if not image.is_absolute():
+        image = map_yaml.parent / image
+
+    width, height, max_value, data = _read_p2_pgm(image)
+    resolution = float(metadata.get("resolution", "0.1"))
+    origin = _parse_origin(metadata.get("origin", "[0, 0, 0]"))
+    origin_x = origin[0] if len(origin) > 0 else 0.0
+    origin_y = origin[1] if len(origin) > 1 else 0.0
+    free_value = max_value
+
+    free_cells = {(col, row) for row in range(height) for col in range(width) if data[row * width + col] == free_value}
+    if not free_cells:
+        raise RuntimeError(f"No free cells found in '{image}'.")
+
+    obstacle_distance = {cell: 10**9 for cell in free_cells}
+    queue = deque()
+    for cell in free_cells:
+        col, row = cell
+        if col == 0 or row == 0 or col == width - 1 or row == height - 1:
+            obstacle_distance[cell] = 0
+            queue.append(cell)
+            continue
+        for d_col, d_row in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            neighbor = (col + d_col, row + d_row)
+            if neighbor not in free_cells:
+                obstacle_distance[cell] = 0
+                queue.append(cell)
+                break
+
+    while queue:
+        col, row = queue.popleft()
+        distance = obstacle_distance[(col, row)] + 1
+        for d_col, d_row in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            neighbor = (col + d_col, row + d_row)
+            if neighbor in obstacle_distance and distance < obstacle_distance[neighbor]:
+                obstacle_distance[neighbor] = distance
+                queue.append(neighbor)
+
+    components = []
+    remaining = set(free_cells)
+    while remaining:
+        seed = remaining.pop()
+        component = {seed}
+        queue = deque([seed])
+        while queue:
+            col, row = queue.popleft()
+            for d_col, d_row in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                neighbor = (col + d_col, row + d_row)
+                if neighbor in remaining:
+                    remaining.remove(neighbor)
+                    component.add(neighbor)
+                    queue.append(neighbor)
+        components.append(component)
+
+    largest_component = max(components, key=len)
+    source = (float(source_x), float(source_y))
+
+    def cell_to_world(cell):
+        col, row = cell
+        return (
+            origin_x + (col + 0.5) * resolution,
+            origin_y + (height - row - 0.5) * resolution,
+        )
+
+    min_clearance_cells = max(0, int(math.ceil(min_clearance / resolution)))
+    start_candidates = [
+        cell for cell in largest_component
+        if obstacle_distance.get(cell, 0) >= min_clearance_cells
+    ]
+    if not start_candidates:
+        start_candidates = list(largest_component)
+
+    start_cell = max(
+        start_candidates,
+        key=lambda cell: (cell_to_world(cell)[0] - source[0]) ** 2 + (cell_to_world(cell)[1] - source[1]) ** 2,
+    )
+    start_x, start_y = cell_to_world(start_cell)
+    return f"{start_x:.2f}", f"{start_y:.2f}", "0.0"
+
+
+def _load_simulation_settings(context, pkg_dir, vgr_dir, scenario, simulation):
+    local_sim_yaml = Path(pkg_dir) / "scenarios" / scenario / "simulations" / f"{simulation}.yaml"
+    if local_sim_yaml.is_file():
+        settings = _read_simple_yaml(local_sim_yaml)
+    else:
+        vgr_launch = Path(vgr_dir) / "scenarios" / scenario / "launch" / simulation / "GADEN_ros2.launch"
+        if not vgr_launch.is_file():
+            available = sorted(path.name for path in (Path(vgr_dir) / "scenarios" / scenario / "gas_simulations").glob("*") if path.is_dir())
+            raise RuntimeError(
+                f"Simulation '{simulation}' was not found for {scenario}. "
+                f"Available simulations: {', '.join(available)}"
+            )
+        settings = _parse_vgr_simulation_launch(vgr_launch)
+
+    required = ("source_x", "source_y", "source_z", "gas_type")
+    missing = [name for name in required if name not in settings]
+    if missing:
+        raise RuntimeError(f"Simulation settings for {scenario}/{simulation} are missing: {', '.join(missing)}")
+
+    defaults = {
+        "initial_iteration": 280,
+        "allow_looping": "true",
+        "loop_from_iteration": 280,
+        "loop_to_iteration": 288,
+    }
+    defaults.update(settings)
+    settings = defaults
+
+    _set_launch_configs(context, settings)
+    return settings
 
 
 def _read_p2_pgm(pgm_file):
@@ -92,6 +241,62 @@ def _write_p2_pgm(pgm_file, width, height, max_value, data):
         start = row * width
         lines.append(" ".join(str(value) for value in data[start:start + width]))
     pgm_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _uniform_free_space_variance(map_yaml):
+    metadata = _read_simple_yaml(map_yaml)
+    image = Path(metadata["image"])
+    if not image.is_absolute():
+        image = map_yaml.parent / image
+
+    width, height, max_value, data = _read_p2_pgm(image)
+    resolution = float(metadata.get("resolution", "0.1"))
+    origin = _parse_origin(metadata.get("origin", "[0, 0, 0]"))
+    origin_x = origin[0] if len(origin) > 0 else 0.0
+    origin_y = origin[1] if len(origin) > 1 else 0.0
+    free_value = max_value
+
+    free_coords = []
+    for row in range(height):
+        for col in range(width):
+            if data[row * width + col] == free_value:
+                free_coords.append((
+                    origin_x + (col + 0.5) * resolution,
+                    origin_y + (height - row - 0.5) * resolution,
+                ))
+
+    if not free_coords:
+        raise RuntimeError(f"No free cells found when calculating dynamic threshold for '{map_yaml}'.")
+
+    mean_x = sum(x for x, _ in free_coords) / len(free_coords)
+    mean_y = sum(y for _, y in free_coords) / len(free_coords)
+    variance = sum((x - mean_x) ** 2 + (y - mean_y) ** 2 for x, y in free_coords) / len(free_coords)
+
+    return {
+        "free_cells": len(free_coords),
+        "free_area": len(free_coords) * resolution * resolution,
+        "uniform_variance": variance,
+        "uniform_std": math.sqrt(variance),
+    }
+
+
+def _suggest_dynamic_convergence_threshold(map_yaml, target_error, alpha, max_error):
+    stats = _uniform_free_space_variance(map_yaml)
+    target_threshold = target_error * target_error
+    map_threshold = alpha * stats["uniform_variance"]
+    max_threshold = max_error * max_error
+    suggested_threshold = min(max(target_threshold, map_threshold), max_threshold)
+    stats.update({
+        "target_error": target_error,
+        "alpha": alpha,
+        "max_error": max_error,
+        "target_threshold": target_threshold,
+        "map_threshold": map_threshold,
+        "max_threshold": max_threshold,
+        "suggested_threshold": suggested_threshold,
+        "suggested_uncertainty_radius": math.sqrt(suggested_threshold),
+    })
+    return stats
 
 
 def _make_rviz_config_compatible(source_config, target_config):
@@ -134,13 +339,18 @@ def _resample_binary_map(width, height, data, source_resolution, target_resoluti
                         free_cells += 1
 
             # Majority sampling gives a practical in-between map resolution without
-            # making House01's already narrow passages vanish completely.
+            # making already narrow indoor passages vanish completely.
             resampled.append(free_value if free_cells >= total_cells / 2 else blocked_value)
 
     return target_width, target_height, resampled
 
 
-def _make_navigation_safe_map(source_yaml, target_yaml, target_resolution=None, close_diagonal_gaps=True):
+def _make_navigation_safe_map(
+    source_yaml,
+    target_yaml,
+    target_resolution=None,
+    close_diagonal_gaps=True,
+):
     metadata = _read_simple_yaml(source_yaml)
     source_image = Path(metadata["image"])
     if not source_image.is_absolute():
@@ -155,7 +365,7 @@ def _make_navigation_safe_map(source_yaml, target_yaml, target_resolution=None, 
     blocked_cells = set()
 
     if close_diagonal_gaps:
-        # House01 contains diagonal one-pixel gaps that look passable to a grid planner,
+        # Some VGR maps contain diagonal one-pixel gaps that look passable to a grid planner,
         # but trap the simulated robot/controller. Close only those corner-cutting leaks.
         for row in range(height - 1):
             for col in range(width - 1):
@@ -302,69 +512,97 @@ def launch_arguments():
         DeclareLaunchArgument("gsl_scale", default_value="1"),
         DeclareLaunchArgument("gsl_map_resolution", default_value="0.16"),
         DeclareLaunchArgument("convergence_thr", default_value=""),
-        DeclareLaunchArgument("robot_radius", default_value="0.02"),
-        DeclareLaunchArgument("close_diagonal_gaps", default_value="True"),
+        DeclareLaunchArgument("robot_radius", default_value="0.01"),
+        DeclareLaunchArgument("close_diagonal_gaps", default_value="False"),
         DeclareLaunchArgument("basic_sim_log_level", default_value="WARN"),
+        DeclareLaunchArgument("rviz_log_level", default_value="WARN"),
+        DeclareLaunchArgument("gsl_start_delay", default_value="6.0"),
+        DeclareLaunchArgument("gsl_call_delay", default_value="12.0"),
+        DeclareLaunchArgument("dynamic_threshold_target_error", default_value="1.0"),
+        DeclareLaunchArgument("dynamic_threshold_alpha", default_value="0.03"),
+        DeclareLaunchArgument("dynamic_threshold_max_error", default_value="1.5"),
+        DeclareLaunchArgument("variance_log_interval", default_value="5.0"),
     ]
 
 
 def launch_setup(context, *args, **kwargs):
-    read_sim_yaml(context)
-
     robot_name = LaunchConfiguration("robot_name")
     pkg_dir = get_package_share_directory("vgr_pmfs_house01_env")
-    pmfs_launch_dir = Path(get_package_share_directory("pmfs_env")) / "launch"
+    wrapper_launch_dir = Path(pkg_dir) / "launch"
     vgr_dir = get_package_share_directory("vgr_dataset")
     scenario = LaunchConfiguration("scenario").perform(context)
     simulation = LaunchConfiguration("simulation").perform(context)
     method = LaunchConfiguration("method").perform(context)
+    source_map_file = Path(vgr_dir) / "scenarios" / scenario / "occupancy.yaml"
+    if not source_map_file.is_file():
+        raise RuntimeError(f"Scenario '{scenario}' was not found in the VGR dataset.")
+
+    sim_settings = _load_simulation_settings(context, pkg_dir, vgr_dir, scenario, simulation)
     gsl_scale = int(LaunchConfiguration("gsl_scale").perform(context))
     gsl_map_resolution_value = LaunchConfiguration("gsl_map_resolution").perform(context).strip()
     gsl_map_resolution = float(gsl_map_resolution_value) if gsl_map_resolution_value else None
     convergence_thr = LaunchConfiguration("convergence_thr").perform(context).strip()
     robot_radius = LaunchConfiguration("robot_radius").perform(context)
     close_diagonal_gaps = _truthy(LaunchConfiguration("close_diagonal_gaps").perform(context))
-    start_pos_x = LaunchConfiguration("start_pos_x").perform(context)
-    start_pos_y = LaunchConfiguration("start_pos_y").perform(context)
-    start_pos_z = LaunchConfiguration("start_pos_z").perform(context)
-
+    gsl_start_delay = float(LaunchConfiguration("gsl_start_delay").perform(context))
+    gsl_call_delay = float(LaunchConfiguration("gsl_call_delay").perform(context))
+    dynamic_threshold_target_error = float(LaunchConfiguration("dynamic_threshold_target_error").perform(context))
+    dynamic_threshold_alpha = float(LaunchConfiguration("dynamic_threshold_alpha").perform(context))
+    dynamic_threshold_max_error = float(LaunchConfiguration("dynamic_threshold_max_error").perform(context))
+    variance_log_interval = float(LaunchConfiguration("variance_log_interval").perform(context))
     if method in SEMANTIC_METHODS:
         raise RuntimeError(
             f"Method '{method}' requires the semantics stack and extra ontology/detection inputs. "
-            "The House01 VGR wrapper currently supports non-semantic methods only."
+            "The VGR wrapper currently supports non-semantic methods only."
         )
     if method not in NON_SEMANTIC_METHODS:
         raise RuntimeError(
             f"Unsupported method '{method}'. Supported methods for this wrapper are: "
             + ", ".join(sorted(NON_SEMANTIC_METHODS))
         )
-    if gsl_scale < 1 or gsl_scale > 5:
+    if gsl_scale < 1:
         raise RuntimeError(
-            f"House01 is a small 0.1 m/cell map, so gsl_scale must be between 1 and 5. "
-            f"Got gsl_scale={gsl_scale}. Large PMFS scales collapse the map to zero free cells."
+            f"gsl_scale must be a positive integer. Got gsl_scale={gsl_scale}."
         )
     if gsl_map_resolution is not None and gsl_map_resolution <= 0:
         raise RuntimeError(
             f"gsl_map_resolution must be positive when provided. Got {gsl_map_resolution}."
+        )
+    if gsl_start_delay < 0 or gsl_call_delay < 0:
+        raise RuntimeError(
+            f"gsl_start_delay and gsl_call_delay must be non-negative. Got {gsl_start_delay} and {gsl_call_delay}."
+        )
+    if dynamic_threshold_target_error <= 0 or dynamic_threshold_alpha < 0 or dynamic_threshold_max_error <= 0:
+        raise RuntimeError(
+            "dynamic_threshold_target_error and dynamic_threshold_max_error must be positive, "
+            "and dynamic_threshold_alpha must be non-negative."
+        )
+    if dynamic_threshold_target_error > dynamic_threshold_max_error:
+        raise RuntimeError(
+            "dynamic_threshold_target_error must be less than or equal to dynamic_threshold_max_error."
+        )
+    if variance_log_interval < 0:
+        raise RuntimeError(
+            f"variance_log_interval must be zero or positive. Got {variance_log_interval}."
         )
 
     defaults = method_defaults(method)
     convergence_thr_display = convergence_thr if convergence_thr else "algorithm default"
     results_dir = Path("results") / method
     results_dir.mkdir(parents=True, exist_ok=True)
-    results_file = results_dir / f"House01_{simulation}.csv"
+    results_file = results_dir / f"{scenario}_{simulation}.csv"
+    variance_log_file = results_dir / f"{scenario}_{simulation}_variance.csv"
 
     runtime_dir = Path(tempfile.gettempdir()) / "vgr_pmfs_house01_env" / scenario / simulation
     runtime_dir.mkdir(parents=True, exist_ok=True)
     rviz_hit_config = _make_rviz_config_compatible(
-        pmfs_launch_dir / "hit.rviz",
+        wrapper_launch_dir / "hit.rviz",
         runtime_dir / "hit_compatible.rviz",
     )
     rviz_source_config = _make_rviz_config_compatible(
-        pmfs_launch_dir / "source.rviz",
+        wrapper_launch_dir / "source.rviz",
         runtime_dir / "source_compatible.rviz",
     )
-    source_map_file = Path(vgr_dir) / "scenarios" / scenario / "occupancy.yaml"
     navigation_map_file = runtime_dir / "navigation_occupancy.yaml"
     source_map_metadata = _read_simple_yaml(source_map_file)
     source_map_resolution = float(source_map_metadata.get("resolution", "0.1"))
@@ -385,8 +623,40 @@ def launch_setup(context, *args, **kwargs):
     else:
         navigation_map_file = source_map_file
     effective_gsl_cell_size = map_stats["output_resolution"] * gsl_scale
+    dynamic_threshold_stats = _suggest_dynamic_convergence_threshold(
+        navigation_map_file,
+        target_error=dynamic_threshold_target_error,
+        alpha=dynamic_threshold_alpha,
+        max_error=dynamic_threshold_max_error,
+    )
 
-    world_file = runtime_dir / "basic_sim_house01.yaml"
+    if not all(key in sim_settings for key in ("start_pos_x", "start_pos_y", "start_pos_z")):
+        auto_start_clearance = max(float(robot_radius) * 2.0, map_stats["output_resolution"] * 2.0)
+        start_x, start_y, start_z = _auto_start_position(
+            navigation_map_file,
+            sim_settings["source_x"],
+            sim_settings["source_y"],
+            min_clearance=auto_start_clearance,
+        )
+        sim_settings["start_pos_x"] = start_x
+        sim_settings["start_pos_y"] = start_y
+        sim_settings["start_pos_z"] = start_z
+        _set_launch_configs(
+            context,
+            {
+                "start_pos_x": start_x,
+                "start_pos_y": start_y,
+                "start_pos_z": start_z,
+            },
+        )
+    else:
+        auto_start_clearance = 0.0
+
+    start_pos_x = sim_settings["start_pos_x"]
+    start_pos_y = sim_settings["start_pos_y"]
+    start_pos_z = sim_settings["start_pos_z"]
+
+    world_file = runtime_dir / f"basic_sim_{scenario}.yaml"
     world_file.write_text(
         "\n".join([
             f'map: "{navigation_map_file}"',
@@ -437,7 +707,9 @@ def launch_setup(context, *args, **kwargs):
         {"th_wind_present": parse_substitution("$(var th_wind_present)")},
         {"ground_truth_x": parse_substitution("$(var source_x)")},
         {"ground_truth_y": parse_substitution("$(var source_y)")},
-        {"resultsFile": parse_substitution("results/$(var method)/House01_$(var simulation).csv")},
+        {"resultsFile": parse_substitution("results/$(var method)/$(var scenario)_$(var simulation).csv")},
+        {"varianceLogFile": str(variance_log_file)},
+        {"varianceLogInterval": variance_log_interval},
         {"scale": parse_substitution("$(var gsl_scale)")},
         {"markers_height": defaults["markers_height"]},
         {"anemometer_frame": parse_substitution("$(var robot_name)_anemometer_frame")},
@@ -624,6 +896,9 @@ def launch_setup(context, *args, **kwargs):
         arguments=[
             "-d",
             str(rviz_hit_config),
+            "--ros-args",
+            "--log-level",
+            LaunchConfiguration("rviz_log_level"),
         ],
     )
 
@@ -641,11 +916,14 @@ def launch_setup(context, *args, **kwargs):
         arguments=[
             "-d",
             str(rviz_source_config),
+            "--ros-args",
+            "--log-level",
+            LaunchConfiguration("rviz_log_level"),
         ],
     )
 
     delayed_sensor_and_server_nodes = TimerAction(
-        period=3.0,
+        period=gsl_start_delay,
         actions=[
             *loud_logs(
                 "STARTING SENSORS AND GSL SERVER",
@@ -665,7 +943,7 @@ def launch_setup(context, *args, **kwargs):
     )
 
     delayed_gsl_call = TimerAction(
-        period=9.0,
+        period=gsl_call_delay,
         actions=[
             *loud_logs(
                 "SENDING GOAL TO GSL ACTION SERVER",
@@ -677,6 +955,7 @@ def launch_setup(context, *args, **kwargs):
                     ["gsl_map_resolution:", f"{map_stats['output_resolution']:g}"],
                     ["effective GSL cell:", f"{effective_gsl_cell_size:g} m"],
                     ["convergence_thr:", convergence_thr_display],
+                    ["suggested dynamic convergence_thr:", f"{dynamic_threshold_stats['suggested_threshold']:.3f}"],
                 ],
             ),
             *gsl_call,
@@ -685,14 +964,19 @@ def launch_setup(context, *args, **kwargs):
 
     actions = []
     actions.extend(loud_logs(
-        "PREPARING HOUSE01 GSL WRAPPER",
+        "PREPARING VGR GSL WRAPPER",
         details=[
             ["scenario:", LaunchConfiguration("scenario")],
             ["simulation:", LaunchConfiguration("simulation")],
             ["method:", LaunchConfiguration("method")],
+            ["source:", sim_settings["source_x"], ", ", sim_settings["source_y"], ", ", sim_settings["source_z"]],
+            ["start:", sim_settings["start_pos_x"], ", ", sim_settings["start_pos_y"], ", ", sim_settings["start_pos_z"]],
+            ["auto start clearance:", f"{auto_start_clearance:g} m" if auto_start_clearance else "manual/local"],
             ["robot:", robot_name],
             ["runtime dir:", str(runtime_dir)],
             ["results file:", str(results_file)],
+            ["variance log file:", str(variance_log_file)],
+            ["variance log interval:", f"{variance_log_interval:g} s"],
             ["world file:", str(world_file)],
             ["navigation map:", str(navigation_map_file)],
             ["hit rviz config:", str(rviz_hit_config)],
@@ -701,6 +985,25 @@ def launch_setup(context, *args, **kwargs):
             ["map size:", map_stats["source_size"], " -> ", map_stats["output_size"]],
             ["effective GSL cell:", f"{effective_gsl_cell_size:g} m"],
             ["diagonal cells blocked:", str(map_stats["blocked_diagonal_cells"])],
+        ],
+    ))
+    actions.extend(loud_logs(
+        "DYNAMIC GSL CONVERGENCE THRESHOLD SUGGESTION",
+        details=[
+            ["note:", "advisory only; pass convergence_thr:=VALUE to use it"],
+            ["active convergence_thr:", convergence_thr_display],
+            ["suggested convergence_thr:", f"{dynamic_threshold_stats['suggested_threshold']:.3f}"],
+            ["suggested uncertainty radius:", f"{dynamic_threshold_stats['suggested_uncertainty_radius']:.3f} m"],
+            ["formula:", "min(max(target_error^2, alpha * uniform_map_variance), max_error^2)"],
+            ["target_error:", f"{dynamic_threshold_stats['target_error']:.3f} m"],
+            ["alpha:", f"{dynamic_threshold_stats['alpha']:.3f}"],
+            ["max_error:", f"{dynamic_threshold_stats['max_error']:.3f} m"],
+            ["uniform map variance:", f"{dynamic_threshold_stats['uniform_variance']:.3f} m^2"],
+            ["uniform map std:", f"{dynamic_threshold_stats['uniform_std']:.3f} m"],
+            ["map contribution:", f"{dynamic_threshold_stats['map_threshold']:.3f}"],
+            ["free cells:", str(dynamic_threshold_stats["free_cells"])],
+            ["free area:", f"{dynamic_threshold_stats['free_area']:.3f} m^2"],
+            ["example CLI:", "convergence_thr:=", f"{dynamic_threshold_stats['suggested_threshold']:.3f}"],
         ],
     ))
     actions.extend(loud_logs(
@@ -714,9 +1017,15 @@ def launch_setup(context, *args, **kwargs):
             ["gsl_map_resolution:", f"{map_stats['output_resolution']:g}"],
             ["effective GSL cell:", f"{effective_gsl_cell_size:g} m"],
             ["convergence_thr:", convergence_thr_display],
+            ["suggested convergence_thr:", f"{dynamic_threshold_stats['suggested_threshold']:.3f}"],
+            ["variance log file:", str(variance_log_file)],
+            ["variance log interval:", f"{variance_log_interval:g} s"],
             ["robot_radius:", LaunchConfiguration("robot_radius")],
             ["close_diagonal_gaps:", LaunchConfiguration("close_diagonal_gaps")],
             ["basic_sim_log_level:", LaunchConfiguration("basic_sim_log_level")],
+            ["rviz_log_level:", LaunchConfiguration("rviz_log_level")],
+            ["gsl_start_delay:", LaunchConfiguration("gsl_start_delay")],
+            ["gsl_call_delay:", LaunchConfiguration("gsl_call_delay")],
             ["use_rviz:", LaunchConfiguration("use_rviz")],
             ["rviz hit:", LaunchConfiguration("use_hit_rviz")],
             ["rviz source:", LaunchConfiguration("use_source_rviz")],
@@ -731,7 +1040,7 @@ def launch_setup(context, *args, **kwargs):
         actions.extend(loud_logs(
             "OPENING HIT RVIZ WINDOW",
             details=[
-                ["config:", str(pmfs_launch_dir / "hit.rviz")],
+                ["config:", str(wrapper_launch_dir / "hit.rviz")],
                 ["runtime config:", str(rviz_hit_config)],
             ],
             condition=hit_rviz_condition,
@@ -741,7 +1050,7 @@ def launch_setup(context, *args, **kwargs):
         actions.extend(loud_logs(
             "OPENING SOURCE RVIZ WINDOW",
             details=[
-                ["config:", str(pmfs_launch_dir / "source.rviz")],
+                ["config:", str(wrapper_launch_dir / "source.rviz")],
                 ["runtime config:", str(rviz_source_config)],
             ],
             condition=source_rviz_condition,
@@ -753,7 +1062,7 @@ def launch_setup(context, *args, **kwargs):
             "METHOD DOES NOT USE PMFS HIT/SOURCE RVIZ",
             details=[
                 ["method:", method],
-                ["reason:", "this wrapper only reuses hit.rviz/source.rviz for PMFS"],
+                ["reason:", "the local hit.rviz/source.rviz views are PMFS-specific"],
             ],
         ))
     else:
