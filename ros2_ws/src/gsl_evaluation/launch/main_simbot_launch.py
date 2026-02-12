@@ -37,6 +37,20 @@ def _truthy(value):
     return str(value).lower() in ("true", "1", "yes", "on")
 
 
+def _auto_bool(value, default):
+    value = str(value).strip()
+    if value.lower() in ("", "auto"):
+        return bool(default)
+    return _truthy(value)
+
+
+def _auto_float(value, default):
+    value = str(value).strip()
+    if value.lower() in ("", "auto"):
+        return float(default)
+    return float(value)
+
+
 def _clean_scalar(value):
     value = str(value).strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
@@ -173,10 +187,26 @@ def _auto_start_position(map_yaml, source_x, source_y, min_clearance=0.0):
     if not start_candidates:
         start_candidates = list(largest_component)
 
-    start_cell = max(
-        start_candidates,
-        key=lambda cell: (cell_to_world(cell)[0] - source[0]) ** 2 + (cell_to_world(cell)[1] - source[1]) ** 2,
-    )
+    distances = {
+        cell: (cell_to_world(cell)[0] - source[0]) ** 2 + (cell_to_world(cell)[1] - source[1]) ** 2
+        for cell in start_candidates
+    }
+    max_distance = max(distances.values()) if distances else 0.0
+    far_candidates = [
+        cell for cell in start_candidates
+        if max_distance <= 0 or distances[cell] >= max_distance * 0.6
+    ]
+    if not far_candidates:
+        far_candidates = start_candidates
+
+    max_clearance = max(obstacle_distance.get(cell, 0) for cell in far_candidates)
+
+    def start_score(cell):
+        distance_score = distances[cell] / max_distance if max_distance > 0 else 0.0
+        clearance_score = obstacle_distance.get(cell, 0) / max_clearance if max_clearance > 0 else 0.0
+        return clearance_score + 0.25 * distance_score
+
+    start_cell = max(far_candidates, key=start_score)
     start_x, start_y = cell_to_world(start_cell)
     return f"{start_x:.2f}", f"{start_y:.2f}", "0.0"
 
@@ -473,10 +503,28 @@ def method_defaults(method):
         "mu": 0.9,
         "Sp": 0.01,
         "Rconv": 0.5,
+        "default_use_infotaxis": method == "PMFS",
+        "stop_and_measure_time": 0.4,
+        "th_gas_present": 0.1,
+        "th_wind_present": 0.02,
+        "max_wait_for_gas_time": 10.0,
+        "global_exploration_on_gas_timeout": False,
+        "grgsl_global_move_fallback": False,
         "use_pmfs_rviz": method in PMFS_STYLE_METHODS,
     }
 
     if method == "GrGSL":
+        defaults["default_use_infotaxis"] = False
+        defaults["stop_and_measure_time"] = 1.0
+        # VGR filament playback can produce much weaker concentration values
+        # than the original GrGSL demo world, so keep GrGSL sensitive by default.
+        defaults["th_gas_present"] = 0.02
+        defaults["th_wind_present"] = 0.02
+        defaults["max_wait_for_gas_time"] = 6.0
+        defaults["global_exploration_on_gas_timeout"] = True
+        defaults["grgsl_global_move_fallback"] = True
+        defaults["useDiffusionTerm"] = False
+        defaults["stdevMiss"] = 1.5
         defaults["step"] = 0.7
     elif method == "SurgeCast":
         defaults["step"] = 1.0
@@ -505,7 +553,13 @@ def launch_arguments():
         DeclareLaunchArgument("scenario", default_value="House01"),
         DeclareLaunchArgument("simulation", default_value="1,3-2,4_fast"),
         DeclareLaunchArgument("method", default_value="PMFS"),
-        DeclareLaunchArgument("use_infotaxis", default_value="True"),
+        DeclareLaunchArgument("use_infotaxis", default_value="auto"),
+        DeclareLaunchArgument("stop_and_measure_time", default_value="auto"),
+        DeclareLaunchArgument("th_gas_present", default_value="auto"),
+        DeclareLaunchArgument("th_wind_present", default_value="auto"),
+        DeclareLaunchArgument("max_wait_for_gas_time", default_value="auto"),
+        DeclareLaunchArgument("global_exploration_on_gas_timeout", default_value="auto"),
+        DeclareLaunchArgument("grgsl_global_move_fallback", default_value="auto"),
         DeclareLaunchArgument("use_rviz", default_value="True"),
         DeclareLaunchArgument("use_hit_rviz", default_value="True"),
         DeclareLaunchArgument("use_source_rviz", default_value="True"),
@@ -587,6 +641,34 @@ def launch_setup(context, *args, **kwargs):
         )
 
     defaults = method_defaults(method)
+    use_infotaxis = _auto_bool(
+        LaunchConfiguration("use_infotaxis").perform(context),
+        defaults["default_use_infotaxis"],
+    )
+    stop_and_measure_time = _auto_float(
+        LaunchConfiguration("stop_and_measure_time").perform(context),
+        defaults["stop_and_measure_time"],
+    )
+    th_gas_present = _auto_float(
+        LaunchConfiguration("th_gas_present").perform(context),
+        defaults["th_gas_present"],
+    )
+    th_wind_present = _auto_float(
+        LaunchConfiguration("th_wind_present").perform(context),
+        defaults["th_wind_present"],
+    )
+    max_wait_for_gas_time = _auto_float(
+        LaunchConfiguration("max_wait_for_gas_time").perform(context),
+        defaults["max_wait_for_gas_time"],
+    )
+    global_exploration_on_gas_timeout = _auto_bool(
+        LaunchConfiguration("global_exploration_on_gas_timeout").perform(context),
+        defaults["global_exploration_on_gas_timeout"],
+    )
+    grgsl_global_move_fallback = _auto_bool(
+        LaunchConfiguration("grgsl_global_move_fallback").perform(context),
+        defaults["grgsl_global_move_fallback"],
+    )
     convergence_thr_display = convergence_thr if convergence_thr else "algorithm default"
     results_dir = Path("results") / method
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -702,9 +784,12 @@ def launch_setup(context, *args, **kwargs):
         {"use_sim_time": False},
         {"maxSearchTime": 300.0},
         {"robot_location_topic": "ground_truth"},
-        {"stop_and_measure_time": 0.4},
-        {"th_gas_present": parse_substitution("$(var th_gas_present)")},
-        {"th_wind_present": parse_substitution("$(var th_wind_present)")},
+        {"stop_and_measure_time": stop_and_measure_time},
+        {"th_gas_present": th_gas_present},
+        {"th_wind_present": th_wind_present},
+        {"maxWaitForGasTime": max_wait_for_gas_time},
+        {"global_exploration_on_gas_timeout": global_exploration_on_gas_timeout},
+        {"grgsl_global_move_fallback": grgsl_global_move_fallback},
         {"ground_truth_x": parse_substitution("$(var source_x)")},
         {"ground_truth_y": parse_substitution("$(var source_y)")},
         {"resultsFile": parse_substitution("results/$(var method)/$(var scenario)_$(var simulation).csv")},
@@ -718,8 +803,8 @@ def launch_setup(context, *args, **kwargs):
         {"useDiffusionTerm": defaults["useDiffusionTerm"]},
         {"stdevHit": defaults["stdevHit"]},
         {"stdevMiss": defaults["stdevMiss"]},
-        {"infoTaxis": parse_substitution("$(var use_infotaxis)")},
-        {"allowMovementRepetition": parse_substitution("$(var use_infotaxis)")},
+        {"infoTaxis": use_infotaxis},
+        {"allowMovementRepetition": use_infotaxis if method == "PMFS" else True},
         {"headless": defaults["headless"]},
         {"distanceWeight": defaults["distanceWeight"]},
         {"maxUpdatesPerStop": defaults["maxUpdatesPerStop"]},
@@ -955,6 +1040,11 @@ def launch_setup(context, *args, **kwargs):
                     ["gsl_map_resolution:", f"{map_stats['output_resolution']:g}"],
                     ["effective GSL cell:", f"{effective_gsl_cell_size:g} m"],
                     ["convergence_thr:", convergence_thr_display],
+                    ["use_infotaxis:", str(use_infotaxis)],
+                    ["th_gas_present:", f"{th_gas_present:g}"],
+                    ["max_wait_for_gas_time:", f"{max_wait_for_gas_time:g}"],
+                    ["global exploration on gas timeout:", str(global_exploration_on_gas_timeout)],
+                    ["grgsl global move fallback:", str(grgsl_global_move_fallback)],
                     ["suggested dynamic convergence_thr:", f"{dynamic_threshold_stats['suggested_threshold']:.3f}"],
                 ],
             ),
@@ -985,6 +1075,13 @@ def launch_setup(context, *args, **kwargs):
             ["map size:", map_stats["source_size"], " -> ", map_stats["output_size"]],
             ["effective GSL cell:", f"{effective_gsl_cell_size:g} m"],
             ["diagonal cells blocked:", str(map_stats["blocked_diagonal_cells"])],
+            ["use_infotaxis:", str(use_infotaxis)],
+            ["stop_and_measure_time:", f"{stop_and_measure_time:g}"],
+            ["th_gas_present:", f"{th_gas_present:g}"],
+            ["th_wind_present:", f"{th_wind_present:g}"],
+            ["max_wait_for_gas_time:", f"{max_wait_for_gas_time:g}"],
+            ["global exploration on gas timeout:", str(global_exploration_on_gas_timeout)],
+            ["grgsl global move fallback:", str(grgsl_global_move_fallback)],
         ],
     ))
     actions.extend(loud_logs(
@@ -1018,6 +1115,13 @@ def launch_setup(context, *args, **kwargs):
             ["effective GSL cell:", f"{effective_gsl_cell_size:g} m"],
             ["convergence_thr:", convergence_thr_display],
             ["suggested convergence_thr:", f"{dynamic_threshold_stats['suggested_threshold']:.3f}"],
+            ["use_infotaxis:", str(use_infotaxis)],
+            ["stop_and_measure_time:", f"{stop_and_measure_time:g}"],
+            ["th_gas_present:", f"{th_gas_present:g}"],
+            ["th_wind_present:", f"{th_wind_present:g}"],
+            ["max_wait_for_gas_time:", f"{max_wait_for_gas_time:g}"],
+            ["global exploration on gas timeout:", str(global_exploration_on_gas_timeout)],
+            ["grgsl global move fallback:", str(grgsl_global_move_fallback)],
             ["variance log file:", str(variance_log_file)],
             ["variance log interval:", f"{variance_log_interval:g} s"],
             ["robot_radius:", LaunchConfiguration("robot_radius")],
@@ -1087,8 +1191,6 @@ def generate_launch_description():
             value=[PathJoinSubstitution([pkg_dir, "navigation_config", "nav2_params.yaml"])],
         ),
         SetLaunchConfiguration(name="robot_name", value="PioneerP3DX"),
-        SetLaunchConfiguration(name="th_gas_present", value="0.1"),
-        SetLaunchConfiguration(name="th_wind_present", value="0.02"),
         SetLaunchConfiguration(name="player_freq", value="0.1"),
         SetLaunchConfiguration(name="filament_movement_stdev", value="0.5"),
         SetLaunchConfiguration(name="sourceDiscriminationPower", value="0.3"),
