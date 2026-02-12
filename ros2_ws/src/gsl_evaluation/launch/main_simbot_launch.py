@@ -28,11 +28,6 @@ SEMANTIC_METHODS = {
     "SemanticGrGSL",
 }
 
-PMFS_STYLE_METHODS = {
-    "PMFS",
-}
-
-
 def _truthy(value):
     return str(value).lower() in ("true", "1", "yes", "on")
 
@@ -510,7 +505,7 @@ def method_defaults(method):
         "max_wait_for_gas_time": 10.0,
         "global_exploration_on_gas_timeout": False,
         "grgsl_global_move_fallback": False,
-        "use_pmfs_rviz": method in PMFS_STYLE_METHODS,
+        "use_gsl_rviz": method in NON_SEMANTIC_METHODS,
     }
 
     if method == "GrGSL":
@@ -528,22 +523,18 @@ def method_defaults(method):
         defaults["step"] = 0.7
     elif method == "SurgeCast":
         defaults["step"] = 1.0
-        defaults["use_pmfs_rviz"] = False
     elif method == "SurgeSpiral":
         defaults["step"] = 1.0
         defaults["initSpiralStep"] = 1.0
         defaults["spiralStep_increment"] = 0.4
-        defaults["use_pmfs_rviz"] = False
     elif method == "Spiral":
         defaults["initial_step"] = 0.6
         defaults["step_increment"] = 0.3
         defaults["intervalLength"] = 0.5
-        defaults["use_pmfs_rviz"] = False
     elif method == "ParticleFilter":
         defaults["step"] = 1.0
         defaults["numberOfParticles"] = 500
         defaults["convergenceThr"] = 0.5
-        defaults["use_pmfs_rviz"] = False
 
     return defaults
 
@@ -1140,7 +1131,7 @@ def launch_setup(context, *args, **kwargs):
     actions.append(basic_sim)
     actions.append(delayed_sensor_and_server_nodes)
     actions.append(delayed_gsl_call)
-    if LaunchConfiguration("use_rviz").perform(context).lower() in ("true", "1", "yes") and defaults["use_pmfs_rviz"]:
+    if LaunchConfiguration("use_rviz").perform(context).lower() in ("true", "1", "yes") and defaults["use_gsl_rviz"]:
         actions.extend(loud_logs(
             "OPENING HIT RVIZ WINDOW",
             details=[
@@ -1163,10 +1154,10 @@ def launch_setup(context, *args, **kwargs):
         actions.append(rviz_source)
     elif LaunchConfiguration("use_rviz").perform(context).lower() in ("true", "1", "yes"):
         actions.extend(loud_logs(
-            "METHOD DOES NOT USE PMFS HIT/SOURCE RVIZ",
+            "METHOD DOES NOT USE HIT/SOURCE RVIZ",
             details=[
                 ["method:", method],
-                ["reason:", "the local hit.rviz/source.rviz views are PMFS-specific"],
+                ["reason:", "hit/source RViz is enabled for supported non-semantic GSL methods only"],
             ],
         ))
     else:
