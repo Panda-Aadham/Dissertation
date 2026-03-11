@@ -1,0 +1,96 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Environment_CAD1
+        - /RobotModel1
+        - /ExplorationPath1
+      Splitter Ratio: 0.55
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Source
+      Topic:
+        Value: /source_visualization
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Filaments
+      Topic:
+        Value: /filament_visualization
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Environment_CAD
+      Topic:
+        Value: /environment_cad_visualization
+    - Class: rviz_default_plugins/LaserScan
+      Enabled: true
+      Name: LaserScan
+      Topic:
+        Value: /PioneerP3DX/laser_scan
+      Color Transformer: Intensity
+      Size (m): 0.01
+      Style: Flat Squares
+      Use Fixed Frame: true
+      Use rainbow: true
+    - Class: rviz_default_plugins/Map
+      Enabled: true
+      Name: KDMGasEstimate
+      Topic:
+        Value: /PioneerP3DX/KDM_VW/gas_estimate
+      Alpha: 0.75
+      Color Scheme: map
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: ExplorationPath
+      Topic:
+        Value: /PioneerP3DX/KDM_VW/exploration_path
+      Color: 255; 110; 0
+      Line Style: Billboards
+      Line Width: 0.04
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0.03
+    - Class: rviz_default_plugins/RobotModel
+      Enabled: true
+      Name: RobotModel
+      Description Source: Topic
+      Description Topic:
+        Value: /PioneerP3DX/robot_description
+    - Class: rviz_default_plugins/Path
+      Enabled: false
+      Name: NavPlan
+      Topic:
+        Value: /PioneerP3DX/plan
+      Color: 80; 170; 255
+      Line Style: Billboards
+      Line Width: 0.03
+  Enabled: true
+  Global Options:
+    Background Color: 183; 194; 217
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic:
+        Value: /PioneerP3DX/initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /PioneerP3DX/goal_pose
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Current View
+      Target Frame: <Fixed Frame>
+      Scale: 80
+      X: 5
+      Y: 5
