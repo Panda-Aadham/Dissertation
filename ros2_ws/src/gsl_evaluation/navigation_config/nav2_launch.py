@@ -121,7 +121,7 @@ def launch_setup(context, *args, **kwargs):
 
 
 def generate_launch_description():
-    my_dir = get_package_share_directory("vgr_pmfs_house01_env")
+    my_dir = get_package_share_directory("gsl_evaluation")
 
     launch_description = [
         SetEnvironmentVariable("RCUTILS_LOGGING_BUFFERED_STREAM", "1"),

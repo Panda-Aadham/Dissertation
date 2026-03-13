@@ -12,7 +12,7 @@ It does not modify or remove any existing files. Instead, it reuses:
 Example:
 
 ```bash
-ros2 launch vgr_pmfs_house01_env main_simbot_launch.py simulation:=1,3-2,4_fast
+ros2 launch gsl_evaluation main_simbot_launch.py simulation:=1,3-2,4_fast
 ```
 
 Supported methods:
@@ -27,13 +27,13 @@ Supported methods:
 Example with an explicit method:
 
 ```bash
-ros2 launch vgr_pmfs_house01_env main_simbot_launch.py simulation:=1,3-2,4_fast method:=GrGSL
+ros2 launch gsl_evaluation main_simbot_launch.py simulation:=1,3-2,4_fast method:=GrGSL
 ```
 
 Run the same scenario repeatedly without manually restarting:
 
 ```bash
-ros2 launch vgr_pmfs_house01_env series_simbot_launch.py runs:=10 scenario:=House02 simulation:=3,5-1_fast method:=PMFS use_rviz:=False
+ros2 launch gsl_evaluation series_simbot_launch.py runs:=10 scenario:=House02 simulation:=3,5-1_fast method:=PMFS use_rviz:=False
 ```
 
 The series launch starts one full `main_simbot_launch.py` child launch at a time and waits for it to exit before starting the next run. By default it uses `run_index:=auto`, so result and variance CSV rows continue with the next available run index. To force a fixed sequence, pass `start_run_index:=1`.
@@ -41,7 +41,7 @@ The series launch starts one full `main_simbot_launch.py` child launch at a time
 Run scenarios from `vgr_dataset/simulations.csv` without typing each house manually:
 
 ```bash
-ros2 launch vgr_pmfs_house01_env series_simbot_launch.py scenario_set:=first simulation_speed:=fast runs:=3 method:=PMFS use_rviz:=False
+ros2 launch gsl_evaluation series_simbot_launch.py scenario_set:=first simulation_speed:=fast runs:=3 method:=PMFS use_rviz:=False
 ```
 
 Useful batch options:

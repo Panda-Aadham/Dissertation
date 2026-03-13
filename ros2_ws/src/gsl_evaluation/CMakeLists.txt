@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(vgr_pmfs_house01_env)
+project(gsl_evaluation)
 
 find_package(ament_cmake REQUIRED)
 

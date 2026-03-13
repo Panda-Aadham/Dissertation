@@ -155,7 +155,7 @@ def launch_arguments():
 
 def launch_setup(context, *args, **kwargs):
     robot_name = LaunchConfiguration("robot_name")
-    pkg_dir = get_package_share_directory("vgr_pmfs_house01_env")
+    pkg_dir = get_package_share_directory("gsl_evaluation")
     wrapper_launch_dir = Path(pkg_dir) / "launch"
     vgr_dir = get_package_share_directory("vgr_dataset")
     scenario = LaunchConfiguration("scenario").perform(context)
@@ -260,7 +260,7 @@ def launch_setup(context, *args, **kwargs):
         else int(run_index_value)
     )
 
-    runtime_dir = Path(tempfile.gettempdir()) / "vgr_pmfs_house01_env" / scenario / simulation
+    runtime_dir = Path(tempfile.gettempdir()) / "gsl_evaluation" / scenario / simulation
     runtime_dir.mkdir(parents=True, exist_ok=True)
     rviz_hit_config = _make_rviz_config_compatible(
         wrapper_launch_dir / "hit.rviz",
@@ -768,7 +768,7 @@ def launch_setup(context, *args, **kwargs):
 
 
 def generate_launch_description():
-    pkg_dir = get_package_share_directory("vgr_pmfs_house01_env")
+    pkg_dir = get_package_share_directory("gsl_evaluation")
 
     launch_description = [
         SetEnvironmentVariable("RCUTILS_LOGGING_BUFFERED_STREAM", "1"),

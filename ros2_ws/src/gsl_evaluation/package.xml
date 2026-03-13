@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>vgr_pmfs_house01_env</name>
+  <name>gsl_evaluation</name>
   <version>0.0.0</version>
-  <description>Wrapper environment for evaluation of GSL methods on the VGR dataset without modifying existing packages.</description>
+  <description>Wrapper environment for evaluation of GSL methods on the VGR dataset without modifying third party packages.</description>
   <!-- Heriot-Watt University Email: Will be inactive as of June 2026 -->
   <maintainer email="aa2212@hw.ac.uk">Aadham Ahmad</maintainer>
 

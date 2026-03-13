@@ -249,7 +249,7 @@ def _series_setup(context, *args, **kwargs):
             command = [
                 "ros2",
                 "launch",
-                "vgr_pmfs_house01_env",
+                "gsl_evaluation",
                 "main_simbot_launch.py",
                 *_launch_cli_arguments(scenario_passthrough),
                 f"run_index:={run_index}",
