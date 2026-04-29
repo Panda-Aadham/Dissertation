@@ -27,6 +27,13 @@ This repository contains several robotics, simulation, and embedded projects col
 - `ros2_ws/results/generate_summary_files.py`
   Script for generating summary CSV files from the raw result folders.
 
+- `media/`
+  Short demonstration clips from the dissertation experiments.
+  This currently contains:
+  - `Q&A_Presentation.pptx`, which is the powerpoint presentation made for the Q&A session deliverable (D5) of the project.
+  - `GDM.mp4`, showing the KDM+V/W algorithm running for gas distribution mapping on `House01` from the VGR dataset
+  - `GSL.mp4`, showing the PMFS algorithm running for gas source localisation on `House01` from the VGR dataset
+
 ### Other repository components
 
 - `esp32-firmware/`
@@ -104,6 +111,6 @@ The current GADEN setup is known to work with the following environment:
 
 ## Notes
 
-- The dissertation work is mainly inside `ros2_ws/`.
+- The dissertation work is mainly inside `ros2_ws/`, with `media/` providing short visual examples of the House01 runs.
 - The `python_model/` folder is a separate ESP32 air-quality project and should not be treated as part of the dissertation pipeline.
 - For package-specific usage, prefer the README inside the relevant package directory over this top-level overview.
